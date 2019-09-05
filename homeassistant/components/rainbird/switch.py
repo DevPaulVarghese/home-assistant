@@ -7,6 +7,7 @@ import voluptuous as vol
 
 from homeassistant.components.switch import PLATFORM_SCHEMA, SwitchDevice
 from homeassistant.const import (
+    ATTR_ENTITY_ID,
     CONF_FRIENDLY_NAME,
     CONF_SCAN_INTERVAL,
     CONF_SWITCHES,
@@ -15,10 +16,13 @@ from homeassistant.const import (
 )
 from homeassistant.helpers import config_validation as cv
 
-from . import DATA_RAINBIRD
+from . import DATA_RAINBIRD, DOMAIN
 
-DOMAIN = "rainbird"
 _LOGGER = logging.getLogger(__name__)
+
+ATTR_DURATION = "duration"
+
+SERVICE_START_IRRIGATION = "start_irrigation"
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
     {
@@ -35,6 +39,13 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
     }
 )
 
+SERVICE_SCHEMA_IRRIGATION = vol.Schema(
+    {
+        vol.Required(ATTR_ENTITY_ID): cv.entity_id,
+        vol.Required(ATTR_DURATION): vol.All(vol.Coerce(float), vol.Range(min=0)),
+    }
+)
+
 
 def setup_platform(hass, config, add_entities, discovery_info=None):
     """Set up Rain Bird switches over a Rain Bird controller."""
@@ -44,6 +55,22 @@ def setup_platform(hass, config, add_entities, discovery_info=None):
     for dev_id, switch in config.get(CONF_SWITCHES).items():
         devices.append(RainBirdSwitch(controller, switch, dev_id))
     add_entities(devices, True)
+
+    def start_irrigation(service):
+        """Set the duration device state attribute and start the irrigation."""
+        entity_id = service.data.get(ATTR_ENTITY_ID)
+        duration = service.data.get(ATTR_DURATION)
+
+        for device in devices:
+            if isinstance(device, RainBirdSwitch) and device.entity_id == entity_id:
+                device.start_irrigation(duration)
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_START_IRRIGATION,
+        start_irrigation,
+        schema=SERVICE_SCHEMA_IRRIGATION,
+    )
 
 
 class RainBirdSwitch(SwitchDevice):
@@ -71,13 +98,17 @@ class RainBirdSwitch(SwitchDevice):
 
     def turn_on(self, **kwargs):
         """Turn the switch on."""
-        if self._rainbird.irrigate_zone(int(self._zone), int(self._duration)):
-            self._state = True
+        self.start_irrigation(self._duration)
 
     def turn_off(self, **kwargs):
         """Turn the switch off."""
         if self._rainbird.stop_irrigation():
             self._state = False
+
+    def start_irrigation(self, duration: int):
+        """Turn the irrigation on."""
+        if self._rainbird.irrigate_zone(int(self._zone), duration):
+            self._state = True
 
     def update(self):
         """Update switch status."""
